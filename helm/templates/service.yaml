@@ -1,0 +1,20 @@
+kind: Service
+metadata:
+  name: {{ template "fullname" . }}-scheduler
+  labels:
+{{ include "default-labels" . | indent 4 }}
+    component: scheduler
+spec:
+  ports:
+    - name: scheduler
+      port: 8786
+      targetPort: 8786
+      protocol: TCP
+    - name: dashboard
+      port: 8787
+      targetPort: 8787
+      protocol: TCP
+  selector:
+    app: {{ template "name" . }}
+    release: {{ .Release.Name }}
+    component: scheduler

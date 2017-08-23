@@ -1,0 +1,38 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ template "fullname" . }}-scheduler
+  labels:
+{{ include "default-labels" . | indent 4 }}
+    component: scheduler
+---
+kind: Role
+apiVersion: rbac.authorization.k8s.io/v1beta1
+metadata:
+  name: {{ template "fullname" . }}-scheduler
+  labels:
+{{ include "default-labels" . | indent 4 }}
+    component: scheduler
+rules:
+  - apiGroups:
+      - ""
+    resources:
+      - pod
+    verbs:
+      - list
+      - create
+---
+apiVersion: rbac.authorization.k8s.io/v1beta1
+kind: RoleBinding
+metadata:
+  name: {{ template "fullname" . }}-scheduler
+  labels:
+{{ include "default-labels" . | indent 4 }}
+    component: scheduler
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ template "fullname" . }}-scheduler
+subjects:
+  - kind: ServiceAccount
+    name: {{ template "fullname" . }}-scheduler

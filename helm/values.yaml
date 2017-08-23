@@ -1,0 +1,6 @@
+image: cedadev/dask
+imageTag: latest
+
+schedulerReplicas: 1
+schedulerResources: {}
+workerResources: {}

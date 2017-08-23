@@ -1,0 +1,56 @@
+apiVersion: extensions/v1beta1
+kind: Deployment
+metadata:
+  name: {{ template "fullname" . }}-scheduler
+  labels:
+{{ include "default-labels" . | indent 4 }}
+    component: scheduler
+spec:
+  replicas: {{ .Values.schedulerReplicas }}
+  # Match any pods from the same release and component, even if other labels differ
+  selector:
+    matchLabels:
+      app: {{ template "name" . }}
+      release: {{ .Release.Name }}
+      component: scheduler
+  template:
+    metadata:
+      labels:
+{{ include "default-labels" . | indent 8 }}
+        component: scheduler
+    spec:
+      serviceAccountName: {{ template "fullname" . }}-scheduler
+      containers:
+        - name: dask-scheduler
+          image: "{{ .Values.image }}:{{ .Values.imageTag }}"
+          imagePullPolicy: {{ default "" .Values.imagePullPolicy | quote }}
+          ports:
+            - containerPort: 8786
+            - containerPort: 8787
+          env:
+            - name: NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: DASK_SCHEDULER_SERVICE
+              value: {{ template "fullname" . }}-scheduler:8786
+            - name: WORKER_LABELS
+              value: "app={{ template "name" . }},release={{ .Release.Name }},component=worker"
+            - name: WORKER_NAME_PREFIX
+              value: "{{ template "fullname" . }}-worker-"
+            - name: WORKER_IMAGE
+              value: "{{ .Values.image }}:{{ .Values.imageTag }}"
+            - name: WORKER_IMAGE_PULL_POLICY
+              value: {{ default "" .Values.imagePullPolicy | quote }}
+            - name: WORKER_RESOURCES
+              # We want to take the dict from values.yaml and turn it into a comma-separated
+              # string of 'k=v' pairs
+              value: "
+                {{- $resources := .Values.workerResources }}
+                {{- range $i, $k := (keys $resources) }}
+                  {{- if $i }},{{ end }}
+                  {{- printf "%s=%s" $k (index $resources $k) }}
+                {{- end -}}
+              "
+          resources:
+{{ toYaml .Values.schedulerResources | indent 12 }}
