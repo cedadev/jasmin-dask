@@ -43,14 +43,22 @@ spec:
             - name: WORKER_IMAGE_PULL_POLICY
               value: {{ default "" .Values.imagePullPolicy | quote }}
             - name: WORKER_RESOURCES
-              # We want to take the dict from values.yaml and turn it into a comma-separated
-              # string of 'k=v' pairs
-              value: "
-                {{- $resources := .Values.workerResources }}
-                {{- range $i, $k := (keys $resources) }}
-                  {{- if $i }},{{ end }}
-                  {{- printf "%s=%s" $k (index $resources $k) }}
+              {{/* Convert the workerResources dict to a JSON string
+                   This template is good enough to convert a resources dict - not exhaustive! */}}
+              {{- define "toJson" -}}
+                {{/* Required to deal with scope wierdness */}}
+                {{- $obj := . }}
+                {{- if kindIs "map" $obj -}}
+                  {
+                    {{- range $i, $k := (keys $obj) -}}
+                      {{- if $i}},{{ end -}}
+                      {{ $k | quote }}:{{ template "toJson" (index $obj $k) }}
+                    {{- end -}}
+                  }
+                {{- else -}}
+                  {{ $obj | quote }}
                 {{- end -}}
-              "
+              {{- end -}}
+              value: {{ include "toJson" .Values.workerResources | quote }}
           resources:
 {{ toYaml .Values.schedulerResources | indent 12 }}

@@ -1,9 +1,10 @@
+# -*- coding: utf-8 -*-
 """
 This module implements the dask class required to provide adaptive functionality
 using Kubernetes.
 """
 
-import logging, os
+import logging, os, json, urlparse
 
 import distributed.deploy
 from kubernetes import client, config
@@ -20,9 +21,11 @@ class KubeCluster(object):
         self.log = logging.getLogger("distributed.deploy.adaptive")
         # Configure ourselves using environment variables
         if 'KUBECONFIG' in os.environ:
-            kubernetes.config.load_kube_config()
+            config.load_kube_config()
         else:
-            kubernetes.config.load_incluster_config()
+            config.load_incluster_config()
+        # Switch off SSL host name verification for now (the JAP Python is old... :-()
+        client.configuration.assert_hostname = False
         self.api = client.CoreV1Api()
         # Read the environment variables for configuration
         self.namespace = os.environ.get('NAMESPACE', 'dask')
@@ -31,21 +34,25 @@ class KubeCluster(object):
         worker_name_prefix = os.environ.get('WORKER_NAME_PREFIX', 'dask-worker-')
         worker_image = os.environ.get('WORKER_IMAGE', 'daskdev/dask:latest')
         worker_image_pull_policy = os.environ.get('WORKER_IMAGE_PULL_POLICY', '')
-        # Worker resources should be given as a string like "cpu=100m,memory=1Gi"
+        # Worker resources should be given as a JSON string, e.g.
+        # "{'requests': {'cpu':'100m','memory':'1Gi'}}"
         # We need them as a dict
-        worker_resources = dict(
-            r.split('=') for r in os.environ.get('WORKER_RESOURCES', '').split(',')
-        )
+        worker_resources = json.loads(os.environ.get('WORKER_RESOURCES', '\{\}'))
         # Build the pod template once for use later
         # Note that because we use generate_name rather than name, this is reusable
         self.pod_template = client.V1Pod(
             metadata = client.V1ObjectMeta(
                 generate_name = worker_name_prefix,
                 # Convert comma-separated 'k=v' pairs to a dict
-                labels = dict(l.split('=') for l in self.worker_labels.split(','))
+                labels = dict(
+                    l.strip().split('=')
+                    for l in self.worker_labels.split(',')
+                    if l.strip()
+                )
             ),
             spec = client.V1PodSpec(
-                # We don't attempt to restart failed workers
+                # Don't attempt to restart failed workers as this causes funny things
+                # to happen when dask kills workers legitimately
                 restart_policy = 'Never',
                 containers = [
                     client.V1Container(
@@ -71,12 +78,12 @@ class KubeCluster(object):
                             ),
                         ],
                         args = [
-                            'dask-worker'
+                            'dask-worker',
                             dask_scheduler_service,
-                            '--nprocs 1',
-                            '--nthreads 1',
-                            '--host $(POD_IP)',
-                            '--name $(POD_NAME)',
+                            '--nprocs', '1',
+                            '--nthreads', '1',
+                            '--host', '$(POD_IP)',
+                            '--name', '$(POD_NAME)',
                         ]
                     )
                 ]
@@ -84,7 +91,7 @@ class KubeCluster(object):
         )
         # If resource requests were given, add them to the pod template
         if worker_resources:
-            resources = client.V1ResourceRequirements(requests = worker_resources)
+            resources = client.V1ResourceRequirements(**worker_resources)
             self.pod_template.spec.containers[0].resources = resources
 
     def scale_up(self, n):
@@ -93,7 +100,7 @@ class KubeCluster(object):
         """
         # Find the number of pods that match the specified labels
         try:
-            pods = self.api.list_namespaced_pods(
+            pods = self.api.list_namespaced_pod(
                 self.namespace,
                 label_selector = self.worker_labels
             )
@@ -112,9 +119,39 @@ class KubeCluster(object):
 
     def scale_down(self, workers):
         """
-        This is a no-op. Kubernetes will automatically terminate the pods when
-        the worker process exits.
+        When the worker process exits, Kubernetes leaves the pods in a completed
+        state. Kill them when we are asked to.
         """
+        # Get the existing worker pods
+        try:
+            pods = self.api.list_namespaced_pod(self.namespace, label_selector = self.worker_labels)
+        except client.rest.ApiException:
+            self.log.exception('Error fetching existing pods. No scaling attempted.')
+            return
+        # Work out pods that we are going to delete
+        # Each worker to delete is given in the form "tcp://<worker ip>:<port>"
+        # Convert this to a set of IPs
+        ips = set(urlparse.urlparse(worker).hostname for worker in workers)
+        to_delete = set(
+            p for p in pods.items
+            # Every time we run, purge any completed pods as well as the specified ones
+            if p.status.phase == 'Succeeded' or p.status.pod_ip in ips
+        )
+        if not to_delete: return
+        self.log.info("Deleting %s of %s pods", len(to_delete), len(pods.items))
+        for pod in to_delete:
+            try:
+                self.api.delete_namespaced_pod(
+                    pod.metadata.name,
+                    self.namespace,
+                    client.V1DeleteOptions()
+                )
+            except client.rest.ApiException as e:
+                # If a pod has already been removed, just ignore the error
+                if e.status != 404:
+                    self.log.exception('Error deleting pod: %s', pod.metadata.name)
+            else:
+                self.log.info('Deleted pod: %s', pod.metadata.name)
 
 
 def dask_setup(scheduler):

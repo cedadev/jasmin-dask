@@ -1,6 +1,15 @@
+domain: dask.k8s.dev
+
 image: cedadev/dask
 imageTag: latest
+imagePullPolicy: IfNotPresent
 
 schedulerReplicas: 1
-schedulerResources: {}
-workerResources: {}
+schedulerResources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+workerResources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
