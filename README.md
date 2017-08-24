@@ -1,8 +1,8 @@
-# jasmin-dask
+# jasmin-dask
 
 This repository provides the Docker image and Helm chart for deploying Dask on JASMIN.
 
-## Building the Docker image
+## Building the Docker image
 
 ```bash
 IMAGE="cedadev/dask"
